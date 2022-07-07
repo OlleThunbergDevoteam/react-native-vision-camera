@@ -66,9 +66,8 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
 
       let enableAudio = self.audio?.boolValue == true
 
-      let onFinish = { (status: AVAssetWriter.Status, error: Error?) in
+      let onFinish = { (recordingSession: RecordingSession, status: AVAssetWriter.Status, error: Error?) in
         defer {
-          self.recordingSession = nil
           if enableAudio {
             self.audioQueue.async {
               self.deactivateAudioSession()
@@ -80,6 +79,7 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
           }
         }
 
+        self.recordingSession = nil
         self.isRecording = false
         ReactLogger.log(level: .info, message: "RecordingSession finished with status \(status.descriptor).")
 
@@ -92,8 +92,8 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
         } else {
           if status == .completed {
             callback.resolve([
-              "path": self.recordingSession!.url.absoluteString,
-              "duration": self.recordingSession!.duration,
+              "path": recordingSession.url.absoluteString,
+              "duration": recordingSession.duration,
             ])
           } else {
             callback.reject(error: .unknown(message: "AVAssetWriter completed with status: \(status.descriptor)"))
@@ -101,14 +101,16 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
         }
       }
 
+      let recordingSession: RecordingSession
       do {
-        self.recordingSession = try RecordingSession(url: tempURL,
-                                                     fileType: fileType,
-                                                     completion: onFinish)
+        recordingSession = try RecordingSession(url: tempURL,
+                                                fileType: fileType,
+                                                completion: onFinish)
       } catch let error as NSError {
         callback.reject(error: .capture(.createRecorderError(message: nil)), cause: error)
         return
       }
+      self.recordingSession = recordingSession
 
       var videoCodec: AVVideoCodecType?
       if let codecString = options["videoCodec"] as? String {
@@ -124,8 +126,8 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
 
       // get pixel format (420f, 420v, x420)
       let pixelFormat = CMFormatDescriptionGetMediaSubType(videoInput.device.activeFormat.formatDescription)
-      self.recordingSession!.initializeVideoWriter(withSettings: videoSettings,
-                                                   pixelFormat: pixelFormat)
+      recordingSession.initializeVideoWriter(withSettings: videoSettings,
+                                             pixelFormat: pixelFormat)
 
       // Init Audio (optional, async)
       if enableAudio {
@@ -134,15 +136,15 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
 
         if let audioOutput = self.audioOutput,
            let audioSettings = audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: fileType) {
-          self.recordingSession!.initializeAudioWriter(withSettings: audioSettings)
+          recordingSession.initializeAudioWriter(withSettings: audioSettings)
         }
       }
 
       // start recording session with or without audio.
       do {
-        try self.recordingSession!.start()
-      } catch {
-        callback.reject(error: .capture(.createRecorderError(message: "RecordingSession failed to start writing.")))
+        try recordingSession.startAssetWriter()
+      } catch let error as NSError {
+        callback.reject(error: .capture(.createRecorderError(message: "RecordingSession failed to start asset writer.")), cause: error)
         return
       }
       self.isRecording = true
@@ -163,30 +165,28 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
     }
   }
 
-  // TODO: Implement for JS
   func pauseRecording(promise: Promise) {
     cameraQueue.async {
       withPromise(promise) {
-        if self.isRecording {
-          self.isRecording = false
-          return nil
-        } else {
+        guard self.recordingSession != nil else {
+          // there's no active recording!
           throw CameraError.capture(.noRecordingInProgress)
         }
+        self.isRecording = false
+        return nil
       }
     }
   }
 
-  // TODO: Implement for JS
   func resumeRecording(promise: Promise) {
     cameraQueue.async {
       withPromise(promise) {
-        if !self.isRecording {
-          self.isRecording = true
-          return nil
-        } else {
+        guard self.recordingSession != nil else {
+          // there's no active recording!
           throw CameraError.capture(.noRecordingInProgress)
         }
+        self.isRecording = true
+        return nil
       }
     }
   }
@@ -288,7 +288,7 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate,
 
     let maxFrameProcessorFps = Double(videoDevice.activeVideoMinFrameDuration.timescale) * Double(videoDevice.activeVideoMinFrameDuration.value)
     let averageFps = 1.0 / frameProcessorPerformanceDataCollector.averageExecutionTimeSeconds
-    let suggestedFrameProcessorFps = floor(min(averageFps, maxFrameProcessorFps))
+    let suggestedFrameProcessorFps = max(floor(min(averageFps, maxFrameProcessorFps)), 1)
 
     if frameProcessorFps.intValue == -1 {
       // frameProcessorFps="auto"

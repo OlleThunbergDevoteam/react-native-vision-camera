@@ -27,7 +27,7 @@ export type SessionError =
   | 'session/camera-not-ready'
   | 'session/audio-session-setup-failed'
   | 'session/audio-in-use-by-other-app'
-  | 'audio-session-failed-to-activate';
+  | 'session/audio-session-failed-to-activate';
 export type CaptureError =
   | 'capture/invalid-photo-format'
   | 'capture/encoder-error'
@@ -36,7 +36,13 @@ export type CaptureError =
   | 'capture/no-recording-in-progress'
   | 'capture/file-io-error'
   | 'capture/create-temp-file-error'
+  | 'capture/invalid-video-options'
   | 'capture/create-recorder-error'
+  | 'capture/recorder-error'
+  | 'capture/no-valid-data'
+  | 'capture/inactive-source'
+  | 'capture/insufficient-storage'
+  | 'capture/file-size-limit-reached'
   | 'capture/invalid-photo-codec'
   | 'capture/not-bound-error'
   | 'capture/capture-type-not-supported'
@@ -120,8 +126,10 @@ class CameraError<TCode extends CameraErrorCode> extends Error {
   public get message(): string {
     return this._message;
   }
-  public get cause(): ErrorWithCause | undefined {
-    return this._cause;
+  public get cause(): Error | undefined {
+    const c = this._cause;
+    if (c == null) return undefined;
+    return new Error(`[${c.code}]: ${c.message}`);
   }
 
   /**
